@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 from django.conf import settings
 from langchain.embeddings import OpenAIEmbeddings
@@ -9,8 +10,10 @@ from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from .utils import create_vector_store
 from django.http import JsonResponse
+from django.core.files.storage import default_storage
 from langchain.chat_models import ChatOpenAI
 from langchain.chains import RetrievalQA
+from .tasks import process_csv_and_create_vector_store
 
 
 class LoadStorePDFData(APIView):
@@ -67,4 +70,29 @@ class QueryFromRAG(APIView):
             error_message = str(e)
             return Response(
                 {"error": error_message}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class LoadStorePDFDataCelery(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        file = request.FILES["file"]
+        if not file.name.endswith(".csv"):
+            return Response(
+                {"response": "Please upload the data in csv file type"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            file_path = default_storage.save(f"uploads/{file.name}", file)
+            full_path = os.path.join(settings.MEDIA_ROOT, file_path)
+
+            # Send task to Celery
+            process_csv_and_create_vector_store.delay(full_path)
+
+            return Response({"response": "Data upload initiated"}, status=status.HTTP_202_ACCEPTED)
+        except Exception as e:
+            return Response(
+                {"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
